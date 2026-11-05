@@ -350,6 +350,14 @@ impl Tunn {
         self.encapsulate_at(src, dst, Instant::now())
     }
 
+    /// Whether [`Tunn::encapsulate_at`] would encrypt with a session at `now` instead of queueing
+    /// the packet and starting a handshake.
+    pub fn has_usable_session_at(&self, now: Instant) -> bool {
+        self.sessions[self.current]
+            .as_ref()
+            .is_some_and(|s| s.should_use_at(now) || self.timers.is_responder())
+    }
+
     /// Encapsulate a single packet from the tunnel interface.
     /// Returns TunnResult.
     ///
@@ -805,6 +813,20 @@ mod tests {
         );
 
         (my_tun, their_tun)
+    }
+
+    #[test]
+    fn usable_session_tracks_handshake_completion() {
+        let now = Instant::now();
+        let (mut my_tun, mut their_tun) = create_two_tuns(now);
+        assert!(!my_tun.has_usable_session_at(now));
+        let init = create_handshake_init(&mut my_tun, now);
+        let resp = create_handshake_response(&mut their_tun, &init, now);
+        assert!(!their_tun.has_usable_session_at(now));
+        let keepalive = parse_handshake_resp(&mut my_tun, &resp, now);
+        assert!(my_tun.has_usable_session_at(now));
+        parse_keepalive(&mut their_tun, &keepalive, now);
+        assert!(their_tun.has_usable_session_at(now));
     }
 
     #[test]
