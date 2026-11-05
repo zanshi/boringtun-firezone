@@ -437,7 +437,9 @@ impl Tunn {
         self.handle_verified_packet(packet, dst, now)
     }
 
-    pub(crate) fn handle_verified_packet<'a>(
+    /// Handles a packet that already passed `RateLimiter::verify_packet_at`, so mac1 and the
+    /// rate limit are checked once per datagram.
+    pub fn handle_verified_packet<'a>(
         &mut self,
         packet: Packet,
         dst: &'a mut [u8],
