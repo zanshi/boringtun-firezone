@@ -224,6 +224,13 @@ impl Tai64N {
     pub fn after(&self, other: &Tai64N) -> bool {
         (self.secs > other.secs) || ((self.secs == other.secs) && (self.nano > other.nano))
     }
+
+    fn to_bytes(&self) -> [u8; 12] {
+        let mut buf = [0u8; 12];
+        buf[..8].copy_from_slice(&self.secs.to_be_bytes());
+        buf[8..].copy_from_slice(&self.nano.to_be_bytes());
+        buf
+    }
 }
 
 impl fmt::Display for Tai64N {
@@ -422,6 +429,20 @@ impl NoiseParams {
 }
 
 impl Handshake {
+    /// TAI64N timestamp of the last accepted handshake initiation, in wire format.
+    pub(crate) fn last_handshake_timestamp(&self) -> [u8; 12] {
+        self.last_handshake_timestamp.to_bytes()
+    }
+
+    /// Raises the replay floor for handshake initiations. Never lowers it.
+    pub(crate) fn raise_last_handshake_timestamp(&mut self, timestamp: [u8; 12]) {
+        if let Ok(timestamp) = Tai64N::parse(&timestamp) {
+            if timestamp.after(&self.last_handshake_timestamp) {
+                self.last_handshake_timestamp = timestamp;
+            }
+        }
+    }
+
     pub(crate) fn new(
         static_private: x25519::StaticSecret,
         static_public: x25519::PublicKey,

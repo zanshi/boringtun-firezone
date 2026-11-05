@@ -274,6 +274,21 @@ impl Tunn {
         self.handshake.preshared_key()
     }
 
+    /// TAI64N timestamp of the last handshake initiation this tunnel accepted, in wire format.
+    ///
+    /// Carry it to a replacement `Tunn` for the same peer with
+    /// [`Tunn::raise_last_handshake_timestamp`], otherwise recorded initiations can be replayed
+    /// against the new tunnel.
+    pub fn last_handshake_timestamp(&self) -> [u8; 12] {
+        self.handshake.last_handshake_timestamp()
+    }
+
+    /// Rejects handshake initiations whose timestamp is not after `timestamp`. Never lowers the
+    /// current floor.
+    pub fn raise_last_handshake_timestamp(&mut self, timestamp: [u8; 12]) {
+        self.handshake.raise_last_handshake_timestamp(timestamp);
+    }
+
     /// Update the private key and clear existing sessions
     #[deprecated(note = "Prefer `Tunn::set_static_private_at` to avoid time-impurity")]
     pub fn set_static_private(
@@ -788,6 +803,64 @@ mod tests {
         );
 
         (my_tun, their_tun)
+    }
+
+    #[test]
+    fn carried_timestamp_rejects_replayed_initiation_on_new_tunn() {
+        let now = Instant::now();
+        let initiator_secret = x25519_dalek::StaticSecret::random_from_rng(&mut rand::rng());
+        let responder_secret = x25519_dalek::StaticSecret::random_from_rng(&mut rand::rng());
+        let initiator_public = x25519_dalek::PublicKey::from(&initiator_secret);
+        let responder_public = x25519_dalek::PublicKey::from(&responder_secret);
+        let new_responder = |idx: u32| {
+            Tunn::new_at(
+                responder_secret.clone(),
+                initiator_public,
+                None,
+                None,
+                Index::new_local(idx),
+                None,
+                rand::random(),
+                now,
+                now,
+                Duration::ZERO,
+            )
+        };
+        let mut initiator = Tunn::new_at(
+            initiator_secret,
+            responder_public,
+            None,
+            None,
+            Index::new_local(1),
+            None,
+            rand::random(),
+            now,
+            now,
+            Duration::from_secs(1_700_000_000),
+        );
+
+        let init = create_handshake_init(&mut initiator, now);
+        let mut accepted = new_responder(2);
+        create_handshake_response(&mut accepted, &init, now);
+        let floor = accepted.last_handshake_timestamp();
+        assert_ne!(floor, [0; 12]);
+
+        let mut dst = vec![0u8; 2048];
+        let mut unprotected = new_responder(3);
+        assert!(matches!(
+            unprotected.decapsulate_at(None, &init, &mut dst, now),
+            TunnResult::WriteToNetwork(_)
+        ));
+
+        let mut protected = new_responder(3);
+        protected.raise_last_handshake_timestamp(floor);
+        assert!(matches!(
+            protected.decapsulate_at(None, &init, &mut dst, now),
+            TunnResult::Err(WireGuardError::WrongTai64nTimestamp)
+        ));
+
+        protected.raise_last_handshake_timestamp([0; 12]);
+        assert_eq!(protected.last_handshake_timestamp(), floor);
     }
 
     fn create_handshake_init(tun: &mut Tunn, now: Instant) -> Vec<u8> {
